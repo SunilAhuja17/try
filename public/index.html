@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>WebRTC P2P Video Call</title>
+</head>
+<body>
+    <h2>WebRTC Video Call</h2>
+    <video id="localVideo" autoplay playsinline muted></video>
+    <video id="remoteVideo" autoplay playsinline></video>
+    <button onclick="startCall()">Start Call</button>
+
+    <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
+    <script>
+        const socket = io("ws://192.168.29.158:3000");
+        let localStream;
+        let peerConnection;
+        const config = { iceServers: [{ urls: "stun:stun.l.google.com:19302" }] };
+
+        const userId = "User1"; // Change this for another participant
+        const remoteUserId = "User2"; // Change accordingly
+
+        socket.emit("join", { userId });
+
+        socket.on("signal", async (message) => {
+            if (!peerConnection) {
+                console.log("Creating peer connection...");
+                peerConnection = createPeerConnection();
+            }
+
+            console.log(`Received signal: ${message.type}`);
+
+            if (message.type === "offer") {
+                await peerConnection.setRemoteDescription(new RTCSessionDescription(message.offer));
+                const answer = await peerConnection.createAnswer();
+                await peerConnection.setLocalDescription(answer);
+                socket.emit("signal", { type: "answer", answer, from: userId, to: remoteUserId });
+            } else if (message.type === "answer") {
+                if (!peerConnection.currentRemoteDescription) {
+                    await peerConnection.setRemoteDescription(new RTCSessionDescription(message.answer));
+                }
+            } else if (message.type === "candidate" && message.candidate) {
+                try {
+                    await peerConnection.addIceCandidate(new RTCIceCandidate(message.candidate));
+                } catch (error) {
+                    console.warn("Error adding received ICE candidate:", error);
+                }
+            }
+        });
+
+        async function startCall() {
+            localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+            document.getElementById("localVideo").srcObject = localStream;
+
+            peerConnection = createPeerConnection();
+            localStream.getTracks().forEach(track => peerConnection.addTrack(track, localStream));
+
+            const offer = await peerConnection.createOffer();
+            await peerConnection.setLocalDescription(offer);
+            socket.emit("signal", { type: "offer", offer, from: userId, to: remoteUserId });
+        }
+
+        function createPeerConnection() {
+            const pc = new RTCPeerConnection(config);
+
+            pc.onicecandidate = (event) => {
+                if (event.candidate) {
+                    socket.emit("signal", { type: "candidate", candidate: event.candidate, from: userId, to: remoteUserId });
+                }
+            };
+
+            pc.ontrack = (event) => {
+                console.log("Remote stream received", event.streams[0]);
+                document.getElementById("remoteVideo").srcObject = event.streams[0];
+            };
+
+            return pc;
+        }
+    </script>
+</body>
+</html>
